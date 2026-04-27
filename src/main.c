@@ -13,10 +13,10 @@
 
 extern char __bss_start[], __bss_end[];
 
-/* 30 instructions per 60 Hz frame ≈ 1800 ips — matches Octo's default
- * speed for most games, and gives enough headroom that sprite
- * erase→redraw pairs fit in a single frame batch (no inter-frame
- * "sprite missing" flicker). */
+/* Octo's chip8Archive metadata recommends per-ROM tickrates from 7
+ * (octojam1title) up to 200 (tank). 30 covers the chip8Archive median
+ * (~15-30) decently; tank looks slow but doesn't break. Game-specific
+ * tuning would mean reading hashes / metadata, not worth it yet. */
 #define CYCLES_PER_FRAME    30
 #define CHIP8_SCALE         10
 #define DISPLAY_W           (CHIP8_DISPLAY_W * CHIP8_SCALE)
@@ -62,6 +62,13 @@ static uint8_t hid_to_chip8(uint8_t usage) {
 static void on_key_event(uint8_t usage, bool pressed, void *ctx) {
     (void)ctx;
     uint8_t k = hid_to_chip8(usage);
+    /* Trace EVERY key, mapped or not. If you press 1234/qwer/asdf/zxcv
+     * and don't see this log line, the i2c-hid path is broken; if you
+     * see the log but nothing happens in the game, the game probably
+     * doesn't use that key (caveexplorer = Q/E/A/D, not 1234). */
+    uart_printf("hid: usage=0x%x %s -> chip8 key %s%x\n",
+                (uint64_t)usage, pressed ? "DOWN" : "up  ",
+                k == 0xFF ? "(unmapped) 0x" : "0x", (uint64_t)k);
     if (k != 0xFF) chip8_set_key(&vm, k, pressed);
 }
 
@@ -113,11 +120,13 @@ void kmain(uint64_t hartid, uint64_t fdt_addr) {
     }
 
     chip8_reset(&vm, time_now());
-    /* Enable the COSMAC display-wait quirk by default — most original
-     * CHIP-8 games are written assuming DRW blocks until vblank, which
-     * naturally clusters sprite operations to one per 60 Hz frame and
-     * eliminates a class of sub-frame flicker. */
-    chip8_set_vblank_wait(&vm, true);
+    /* COSMAC display-wait quirk — disabled by default. Octo's chip8Archive
+     * metadata sets vBlankQuirks to false on every entry, and enabling it
+     * caps draw-heavy games at one sprite per 60 Hz frame which feels
+     * very sluggish (e.g. tank wants tickrate=200 = 12000 IPS but with
+     * vblank-wait you get 60 sprite blits/sec max). chip8_set_vblank_wait
+     * is exposed for per-ROM opt-in if a particular game needs it. */
+    chip8_set_vblank_wait(&vm, false);
 
     /* If RVVM was started with -ata <rom>.ch8, load the program off the
      * disk; otherwise fall back to the embedded IBM-logo splash. We
