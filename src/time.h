@@ -1,12 +1,13 @@
-/* Read RISC-V mtime via the unprivileged `time` CSR. RVVM ticks at
- * 10 MHz by default (RVVM_OPT_TIME_FREQ in src/rvvm.c), so each tick
- * is 100 ns and 1/60 of a second is 166666 ticks. */
+/* Read RISC-V mtime via the unprivileged `time` CSR. RVVM tick rate
+ * and frame deadline live in rvvm.h. */
 
 #pragma once
 #include <stdint.h>
+#include "rvvm.h"
 
-#define TIME_HZ            10000000ULL
-#define TICKS_PER_FRAME    (TIME_HZ / 60)
+/* Compatibility aliases — keep older code working. */
+#define TIME_HZ            RVVM_TIME_HZ
+#define TICKS_PER_FRAME    RVVM_TICKS_PER_FRAME
 
 static inline uint64_t time_now(void) {
     uint64_t v;

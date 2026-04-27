@@ -1,8 +1,8 @@
 #include "uart.h"
 #include "mmio.h"
+#include "rvvm.h"
 
-/* RVVM ns16550a default base. See src/devices/ns16550a.h in RVVM. */
-#define UART_BASE   0x10000000UL
+#define UART_BASE   RVVM_UART_BASE
 
 /* Register offsets — match src/devices/ns16550a.c lines 35-47. */
 #define UART_RBR    0x0   /* RX buffer        (read,  DLAB=0) */
