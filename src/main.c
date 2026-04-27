@@ -11,16 +11,29 @@
 #include "roms.h"
 #include <stddef.h>
 
-/* "scev fat-ROM" container — optional 16-byte header, magic "SCEVCH8\1"
- * (8 bytes), then per-ROM config we want carried with the file:
- *   off 0 .. 7   "SCEVCH8" + 1-byte version
- *   off 8        cycles_per_frame (uint8, 0 = use default 30)
- *   off 9        flags (bit 0: enable vblank-wait quirk)
- *   off 10..15   reserved (zero)
- * The actual CHIP-8 program starts at offset 16.
+/* "scev fat-ROM" container — optional 16-byte header, magic 'SCEVCH8'
+ * + 1-byte version (1 or 2), then per-ROM config carried with the file.
  *
- * If the magic doesn't match, the file is treated as a raw .ch8 — full
- * backward compatibility with existing ROM dumps. */
+ * Version 1 (legacy):
+ *   off 0..7   magic + version=1
+ *   off 8      cycles_per_frame (u8,  0 = default)
+ *   off 9      flags (bit 0: vblank-wait quirk)
+ *   off 10..15 reserved
+ *
+ * Version 2 (current — wider tickrate for XO-CHIP-style speeds):
+ *   off 0..7   magic + version=2
+ *   off 8..9   cycles_per_frame (u16 LE, 0 = default)
+ *   off 10     flags (bit 0: vblank-wait quirk)
+ *   off 11..15 reserved
+ *
+ * Backward compat: v1 layout had byte 9 as flags and bytes 10..15 as
+ * reserved/zero. v2 reads bytes 8..9 as a u16 LE; an old v1 file with
+ * tickrate=N in byte 8 reads in v2 as tickrate=N (since byte 9 was
+ * always 0 — flags bit 0 only). Old v1 files DO have flags in byte 9
+ * though, so reading them under v2 rules would conflate flags into
+ * the tickrate high byte. We dispatch on version explicitly to be safe.
+ *
+ * Headerless files (no magic) are loaded as raw CHIP-8 with defaults. */
 #define ROM_MAGIC0       'S'
 #define ROM_MAGIC1       'C'
 #define ROM_MAGIC2       'E'
@@ -28,14 +41,13 @@
 #define ROM_MAGIC4       'C'
 #define ROM_MAGIC5       'H'
 #define ROM_MAGIC6       '8'
-#define ROM_VERSION      1
 #define ROM_HEADER_LEN   16
 #define ROM_FLAG_VBLANK  0x01
 
-static bool rom_header_valid(const uint8_t *p) {
+static bool rom_header_magic_ok(const uint8_t *p) {
     return p[0] == ROM_MAGIC0 && p[1] == ROM_MAGIC1 && p[2] == ROM_MAGIC2
         && p[3] == ROM_MAGIC3 && p[4] == ROM_MAGIC4 && p[5] == ROM_MAGIC5
-        && p[6] == ROM_MAGIC6 && p[7] == ROM_VERSION;
+        && p[6] == ROM_MAGIC6;
 }
 
 extern char __bss_start[], __bss_end[];
@@ -172,16 +184,30 @@ void kmain(uint64_t hartid, uint64_t fdt_addr) {
         const uint8_t *prog = disk_buf;
 
         /* Fat-ROM header? Strip it and apply per-ROM config. */
-        if (bytes >= ROM_HEADER_LEN && rom_header_valid(disk_buf)) {
-            uint8_t hdr_tickrate = disk_buf[8];
-            uint8_t hdr_flags    = disk_buf[9];
-            if (hdr_tickrate) cycles_per_frame = hdr_tickrate;
+        if (bytes >= ROM_HEADER_LEN && rom_header_magic_ok(disk_buf)) {
+            uint8_t  ver       = disk_buf[7];
+            uint16_t hdr_tick  = 0;
+            uint8_t  hdr_flags = 0;
+            if (ver == 1) {
+                hdr_tick  = disk_buf[8];
+                hdr_flags = disk_buf[9];
+            } else if (ver == 2) {
+                hdr_tick  = disk_buf[8] | ((uint16_t)disk_buf[9] << 8);
+                hdr_flags = disk_buf[10];
+            } else {
+                uart_printf("ROM hdr: unknown version %u, ignoring\n",
+                            (uint64_t)ver);
+                goto no_header;
+            }
+            if (hdr_tick) cycles_per_frame = hdr_tick;
             if (hdr_flags & ROM_FLAG_VBLANK) vblank_wait = true;
             prog   = disk_buf + ROM_HEADER_LEN;
             bytes -= ROM_HEADER_LEN;
-            uart_printf("ROM hdr: tickrate=%u  vblank_wait=%u\n",
-                        (uint64_t)cycles_per_frame, (uint64_t)vblank_wait);
+            uart_printf("ROM hdr v%u: tickrate=%u  vblank_wait=%u\n",
+                        (uint64_t)ver, (uint64_t)cycles_per_frame,
+                        (uint64_t)vblank_wait);
         }
+no_header:
 
         if (bytes > sizeof(disk_buf) - ROM_HEADER_LEN) {
             bytes = sizeof(disk_buf) - ROM_HEADER_LEN;

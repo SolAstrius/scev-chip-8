@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Build a fat-ROM (.fat.ch8) from a raw CHIP-8 program.
 
-Output layout:
-  16-byte header  "SCEVCH8\\1" + tickrate(u8) + flags(u8) + 6 reserved
+Output layout (header v2):
+  16-byte header  "SCEVCH8\\2" + tickrate(u16 LE) + flags(u8) + 5 reserved
   raw .ch8 bytes
   pad to 512-byte sector boundary
 
 Header is *optional* — the firmware also accepts headerless raw ROMs and
-falls back to compiled-in defaults (30 cycles/frame, vblank-wait off).
+v1 headers (u8 tickrate), falling back to compiled-in defaults
+(30 cycles/frame, vblank-wait off) when no header is present.
 
 Usage:
   mkrom.py in.ch8                              # raw, defaults
@@ -19,13 +20,14 @@ Usage:
 """
 import argparse, json, os, sys, struct
 
-MAGIC = b"SCEVCH8\x01"
+MAGIC_V2 = b"SCEVCH8\x02"
 HEADER_LEN = 16
 FLAG_VBLANK = 0x01
 
 def build_header(tickrate=0, vblank=False):
+    """v2 header: u16 LE tickrate at off 8..9, flags at off 10."""
     flags = FLAG_VBLANK if vblank else 0
-    return MAGIC + struct.pack("<BB6x", tickrate & 0xFF, flags)
+    return MAGIC_V2 + struct.pack("<HB5x", tickrate & 0xFFFF, flags)
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
@@ -59,11 +61,10 @@ def main():
         if opts.get("vBlankQuirks"):
             args.vblank = True
 
-    if args.tickrate > 255:
-        print(f"warning: clamping tickrate {args.tickrate} → 255 "
-              f"(header field is u8). Game may run slower than intended.",
-              file=sys.stderr)
-        args.tickrate = 255
+    if args.tickrate > 65535:
+        print(f"warning: clamping tickrate {args.tickrate} → 65535 "
+              f"(header field is u16).", file=sys.stderr)
+        args.tickrate = 65535
 
     raw = open(args.input, "rb").read()
     body = raw if args.no_header else build_header(args.tickrate, args.vblank) + raw
