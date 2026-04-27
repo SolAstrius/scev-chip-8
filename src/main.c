@@ -1,7 +1,7 @@
 #include "uart.h"
 #include "time.h"
 #include "chip8.h"
-#include "bochs.h"
+#include "gfx.h"
 #include "pci.h"
 #include "fdt.h"
 #include "i2c.h"
@@ -64,7 +64,7 @@ extern char __bss_start[], __bss_end[];
 #define COLOR_BG            0x00101010U
 
 static chip8_t        vm;
-static bochs_t        bd;
+static gfx_t          g;
 static hid_keyboard_t kb;
 
 /* USB HID usage code → CHIP-8 hex keypad. Mapping mirrors the
@@ -158,13 +158,15 @@ void kmain(uint64_t hartid, uint64_t fdt_addr) {
      * sound timer drives a single tone at ~444 Hz. */
     bool snd = hda_init();
 
-    /* Bring up the framebuffer if RVVM was started with -bochs_display. */
-    bool gfx = bochs_init(&bd, DISPLAY_W, DISPLAY_H);
-    if (gfx) {
-        bochs_fill(&bd, COLOR_BG);
-        uart_puts("bochs: framebuffer up\n");
+    /* Bring up a framebuffer — bochs (mode-set to DISPLAY_W×DISPLAY_H)
+     * or simple-framebuffer (whatever -res RVVM was started with).
+     * Falls back to ANSI UART rendering if neither is present. */
+    bool have_gfx = gfx_init_fdt(&g, &fdt, DISPLAY_W, DISPLAY_H);
+    if (have_gfx) {
+        gfx_fill(&g, COLOR_BG);
+        uart_puts("gfx: framebuffer up\n");
     } else {
-        uart_puts("bochs: falling back to ANSI UART render\n");
+        uart_puts("gfx: falling back to ANSI UART render\n");
     }
 
     chip8_reset(&vm, time_now());
@@ -246,8 +248,15 @@ no_header:
         }
 
         if (vm.fb_dirty) {
-            if (gfx) {
-                chip8_render_bochs(&vm, &bd, CHIP8_SCALE, 0, 0, COLOR_FG, COLOR_BG);
+            if (have_gfx) {
+                /* Centre on the surface. Bochs mode-sets to exactly
+                 * DISPLAY_W×DISPLAY_H so x_off/y_off both end up 0;
+                 * simple-framebuffer is whatever -res RVVM was given,
+                 * which is usually larger. */
+                uint32_t x_off = (g.width  > DISPLAY_W) ? (g.width  - DISPLAY_W) / 2 : 0;
+                uint32_t y_off = (g.height > DISPLAY_H) ? (g.height - DISPLAY_H) / 2 : 0;
+                chip8_render_gfx(&vm, &g, CHIP8_SCALE, x_off, y_off,
+                                 COLOR_FG, COLOR_BG);
             } else {
                 chip8_render_ascii(&vm);
             }
