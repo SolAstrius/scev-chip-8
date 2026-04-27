@@ -1,0 +1,9 @@
+.direnv/
+zig-cache/
+zig-out/
+.zig-cache/
+*.bin
+*.elf
+*.o
+result
+result-*
