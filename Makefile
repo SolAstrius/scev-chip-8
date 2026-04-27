@@ -16,7 +16,7 @@ CFLAGS   := -Os -ffreestanding -fno-stack-protector -fno-pie \
 
 LDFLAGS  := -nostdlib -static -Wl,-T,link.ld
 
-OBJS     := build/start.o build/main.o build/uart.o
+OBJS     := build/start.o build/main.o build/uart.o build/chip8.o
 
 all: firmware.bin
 
