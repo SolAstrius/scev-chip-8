@@ -8,18 +8,35 @@
 
   outputs = { nixpkgs, flake-utils, ... }:
     flake-utils.lib.eachDefaultSystem (system:
-      let pkgs = import nixpkgs { inherit system; };
+      let
+        pkgs = import nixpkgs { inherit system; };
+
+        # Runtime libraries RVVM dlopens when launched from `make run`.
+        # Mirrors RVVM's own flake (LekKit/RVVM:flake.nix runtimeDeps) —
+        # without these on LD_LIBRARY_PATH, libasound.so isn't found and
+        # the HDA backend falls back to silent. ALSA_PLUGIN_DIR points
+        # at PipeWire's alsa-lib bridge, since on NixOS /etc/alsa/conf.d
+        # routes default → pcm.pipewire but alsa-lib only finds the
+        # plugin shared object via this env var.
+        rvvmRuntimeDeps = with pkgs; [ alsa-lib ];
+        alsaPluginDir   = "${pkgs.pipewire}/lib/alsa-lib";
+
       in {
         devShells.default = pkgs.mkShell {
           packages = with pkgs; [
-            zig            # cc + linker + cross targets, the whole toolchain
-            qemu           # quick smoke-test against qemu virt before RVVM
+            zig                    # cc + linker + cross targets
+            qemu                   # quick smoke-test against qemu virt before RVVM
             llvmPackages.bintools  # llvm-objdump / llvm-objcopy / llvm-readelf
           ];
+
+          # Make RVVM happy when launched from `make run` inside this shell.
+          LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath rvvmRuntimeDeps;
+          ALSA_PLUGIN_DIR = alsaPluginDir;
 
           shellHook = ''
             echo "chip-8 core: zig $(zig version)"
             echo "target: riscv64-freestanding-none, attached as RVVM mtd-physmap firmware"
+            echo "audio:  libasound at $LD_LIBRARY_PATH"
           '';
         };
       });
