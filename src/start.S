@@ -9,9 +9,20 @@
     .extern kmain
 
 _start:
-    /* Hart 0 only — park any other harts in a wfi loop. */
+    /* RVVM hands us:
+     *   a0 = mhartid
+     *   a1 = physical address of the FDT (Flattened Device Tree)
+     *   PC = reset_pc (= RAM base by default)
+     *   M-mode, MIE clear.
+     * Standard RISC-V boot ABI, set in src/rvvm.c:312-316. */
+
+    /* Park any non-zero hart in a wfi loop — we run single-hart only. */
     csrr    t0, mhartid
     bnez    t0, park
+
+    /* Save a0/a1 across the BSS-zeroing loop so kmain receives them. */
+    mv      s0, a0
+    mv      s1, a1
 
     /* Set up stack — top of the reserved region in link.ld. */
     la      sp, __stack_top
@@ -25,7 +36,9 @@ _start:
     j       1b
 2:
 
-    /* Off we go. */
+    /* Restore boot args, jump to kmain(hartid, fdt_ptr). */
+    mv      a0, s0
+    mv      a1, s1
     call    kmain
 
     /* If kmain returns, halt. */
