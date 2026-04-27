@@ -53,7 +53,7 @@ run-headless: firmware.bin
 
 run-rom: firmware.bin
 	@test -n "$(ROM)" || { echo "usage: make run-rom ROM=roms/foo.padded.ch8"; exit 1; }
-	$(RVVM) firmware.bin -bochs_display -nonet -hda_test -ata $(ROM)
+	$(RVVM) firmware.bin -bochs_display -nonet -hda_test -nvme $(ROM)
 
 clean:
 	rm -rf build firmware.elf firmware.bin
