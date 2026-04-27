@@ -13,7 +13,7 @@
 #include <stdint.h>
 
 /* ======================================================================
- *  Memory map  (RVVM defaults — see src/rvvm.c, src/devices/*.h)
+ *  Memory map  (RVVM defaults — see src/rvvm.c, src/devices/...)
  * ====================================================================== */
 
 #define RVVM_RAM_BASE          0x80000000UL  /* RAM origin = reset PC.

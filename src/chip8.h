@@ -73,3 +73,11 @@ void chip8_set_key(chip8_t *vm, uint8_t key, bool pressed);
 /* Render the framebuffer to UART using ANSI-positioned 2-char cells.
  * Sets fb_dirty=false when done. */
 void chip8_render_ascii(chip8_t *vm);
+
+/* Render the framebuffer onto a Bochs framebuffer at the given scale
+ * (e.g. scale=10 → 640×320). Centred in the display via x_off/y_off.
+ * Sets fb_dirty=false when done. */
+struct bochs_s;
+void chip8_render_bochs(chip8_t *vm, const struct bochs_s *bd,
+                        uint32_t scale, uint32_t x_off, uint32_t y_off,
+                        uint32_t fg, uint32_t bg);

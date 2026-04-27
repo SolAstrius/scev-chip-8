@@ -1,5 +1,6 @@
 #include "chip8.h"
 #include "uart.h"
+#include "bochs.h"
 
 /* Hex-digit font — 5 bytes per glyph, 16 glyphs, total 80 bytes. From
  * Cowgod section 2.4. Bit 7 = leftmost pixel; only top 4 bits drawn
@@ -248,5 +249,20 @@ void chip8_render_ascii(chip8_t *vm) {
     for (int x = 0; x < CHIP8_DISPLAY_W; x++) uart_puts("──");
     uart_puts("┘\n");
 
+    vm->fb_dirty = false;
+}
+
+void chip8_render_bochs(chip8_t *vm, const bochs_t *bd,
+                        uint32_t scale, uint32_t x_off, uint32_t y_off,
+                        uint32_t fg, uint32_t bg) {
+    /* Scale-up nearest-neighbour: each CHIP-8 pixel becomes scale×scale. */
+    for (int y = 0; y < CHIP8_DISPLAY_H; y++) {
+        for (int x = 0; x < CHIP8_DISPLAY_W; x++) {
+            uint32_t c = vm->fb[y * CHIP8_DISPLAY_W + x] ? fg : bg;
+            uint32_t px = x_off + (uint32_t)x * scale;
+            uint32_t py = y_off + (uint32_t)y * scale;
+            bochs_rect(bd, px, py, scale, scale, c);
+        }
+    }
     vm->fb_dirty = false;
 }
