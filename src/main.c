@@ -7,12 +7,17 @@
 #include "i2c.h"
 #include "hid.h"
 #include "ata.h"
+#include "hda.h"
 #include "roms.h"
 #include <stddef.h>
 
 extern char __bss_start[], __bss_end[];
 
-#define CYCLES_PER_FRAME    11
+/* 30 instructions per 60 Hz frame ≈ 1800 ips — matches Octo's default
+ * speed for most games, and gives enough headroom that sprite
+ * erase→redraw pairs fit in a single frame batch (no inter-frame
+ * "sprite missing" flicker). */
+#define CYCLES_PER_FRAME    30
 #define CHIP8_SCALE         10
 #define DISPLAY_W           (CHIP8_DISPLAY_W * CHIP8_SCALE)
 #define DISPLAY_H           (CHIP8_DISPLAY_H * CHIP8_SCALE)
@@ -94,6 +99,10 @@ void kmain(uint64_t hartid, uint64_t fdt_addr) {
                 (void *)uart_at, (void *)pci_at, (void *)i2c_at,
                 (uint64_t)RVVM_I2C_HID_KEYBOARD);
 
+    /* Bring up the speaker if RVVM was started with -hda_test. The CHIP-8
+     * sound timer drives a single tone at ~444 Hz. */
+    bool snd = hda_init();
+
     /* Bring up the framebuffer if RVVM was started with -bochs_display. */
     bool gfx = bochs_init(&bd, DISPLAY_W, DISPLAY_H);
     if (gfx) {
@@ -128,6 +137,7 @@ void kmain(uint64_t hartid, uint64_t fdt_addr) {
     uart_puts("Keypad: 1234 / qwer / asdf / zxcv  (focus the GUI window)\n\n");
 
     uint64_t deadline = time_now() + RVVM_TICKS_PER_FRAME;
+    bool     beeping  = false;       /* track ST-driven beep state */
     for (;;) {
         /* Drain HID events into the CHIP-8 key state. */
         hid_kb_poll(&kb, on_key_event, NULL);
@@ -136,6 +146,16 @@ void kmain(uint64_t hartid, uint64_t fdt_addr) {
             chip8_step(&vm);
         }
         chip8_tick_60hz(&vm);
+
+        /* CHIP-8 sound timer: tone while ST != 0. Switch the beeper
+         * widget on/off only on transitions to avoid spamming verbs. */
+        if (snd) {
+            bool want = (vm.st != 0);
+            if (want != beeping) {
+                hda_beep(want ? RVVM_HDA_BEEP_DIV_440HZ : 0);
+                beeping = want;
+            }
+        }
 
         if (vm.fb_dirty) {
             if (gfx) {
