@@ -42,6 +42,8 @@ void chip8_reset(chip8_t *vm, uint64_t rng_seed) {
     if (vm->rng == 0) vm->rng = 0xCAFEF00D;
 }
 
+void chip8_tick_60hz(chip8_t *vm);     /* fwd to keep order tidy */
+
 void chip8_load(chip8_t *vm, const uint8_t *prog, uint64_t len) {
     uint64_t cap = CHIP8_MEM_SIZE - CHIP8_PROGRAM_BASE;
     if (len > cap) len = cap;
@@ -53,6 +55,7 @@ void chip8_load(chip8_t *vm, const uint8_t *prog, uint64_t len) {
 void chip8_tick_60hz(chip8_t *vm) {
     if (vm->dt) vm->dt--;
     if (vm->st) vm->st--;
+    vm->vblank_pending = false;            /* release any DRW stall */
 }
 
 void chip8_set_key(chip8_t *vm, uint8_t key, bool pressed) {
@@ -111,10 +114,17 @@ static void op_drw(chip8_t *vm, uint8_t x_reg, uint8_t y_reg, uint8_t n) {
         }
     }
     vm->fb_dirty = true;
+    if (vm->vblank_wait_quirk) vm->vblank_pending = true;
+}
+
+void chip8_set_vblank_wait(chip8_t *vm, bool enabled) {
+    vm->vblank_wait_quirk = enabled;
+    if (!enabled) vm->vblank_pending = false;
 }
 
 void chip8_step(chip8_t *vm) {
     if (vm->halted || vm->waiting_for_key) return;
+    if (vm->vblank_pending) return;          /* COSMAC display-wait quirk */
     if (vm->pc >= CHIP8_MEM_SIZE - 1) { halt(vm, 0xFFFF); return; }
 
     /* Fetch a 16-bit big-endian opcode. */

@@ -113,6 +113,11 @@ void kmain(uint64_t hartid, uint64_t fdt_addr) {
     }
 
     chip8_reset(&vm, time_now());
+    /* Enable the COSMAC display-wait quirk by default — most original
+     * CHIP-8 games are written assuming DRW blocks until vblank, which
+     * naturally clusters sprite operations to one per 60 Hz frame and
+     * eliminates a class of sub-frame flicker. */
+    chip8_set_vblank_wait(&vm, true);
 
     /* If RVVM was started with -ata <rom>.ch8, load the program off the
      * disk; otherwise fall back to the embedded IBM-logo splash. We

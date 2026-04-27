@@ -46,6 +46,16 @@ typedef struct {
     bool     waiting_for_key;
     uint8_t  key_dest;
 
+    /* COSMAC VIP "display wait" quirk: DRW stalls the CPU until the
+     * next 60 Hz vblank tick. Naturally clusters all sprite ops to
+     * one-per-frame, which trades some flicker for fps deterministic
+     * scanout pacing. Default OFF; toggle with chip8_set_vblank_wait().
+     *
+     * Implementation: set vblank_pending=true on DRW; chip8_step
+     * returns early while it's set; chip8_tick_60hz clears it. */
+    bool     vblank_wait_quirk;
+    bool     vblank_pending;
+
     /* RNG state for Cxkk (xorshift32 — small, sufficient for games). */
     uint32_t rng;
 
@@ -57,6 +67,9 @@ typedef struct {
 
 /* Initialise/reset VM state and load font sprites. */
 void chip8_reset(chip8_t *vm, uint64_t rng_seed);
+
+/* Toggle the COSMAC-VIP display-wait quirk (default off after reset). */
+void chip8_set_vblank_wait(chip8_t *vm, bool enabled);
 
 /* Copy `len` program bytes into mem[0x200..]. Truncates if too large. */
 void chip8_load(chip8_t *vm, const uint8_t *prog, uint64_t len);
