@@ -80,6 +80,29 @@
  * src/devices/ata.c:675-676. */
 #define RVVM_PCI_ID_ATA           0x01021179U
 
+/* ATA register offsets (within the data BAR — BAR0).
+ * src/devices/ata.c lines 33-46. */
+#define ATA_REG_DATA              0x00   /* 16-bit DATA, R/W */
+#define ATA_REG_ERROR             0x01   /* RO */
+#define ATA_REG_NSECT             0x02   /* sector count, 0 = 256 */
+#define ATA_REG_LBAL              0x03
+#define ATA_REG_LBAM              0x04
+#define ATA_REG_LBAH              0x05
+#define ATA_REG_DEVICE            0x06   /* 0xE0 | (slave<<4) | LBA[27:24] */
+#define ATA_REG_STATUS            0x07   /* RO */
+#define ATA_REG_COMMAND           0x07   /* WO */
+
+/* ATA STATUS bits (src/devices/ata.c lines 56-59). */
+#define ATA_STATUS_ERR            0x01
+#define ATA_STATUS_DRQ            0x08
+#define ATA_STATUS_SRV            0x10
+#define ATA_STATUS_RDY            0x40
+#define ATA_STATUS_BSY            0x80   /* not asserted by RVVM but spec'd */
+
+/* ATA commands we care about. */
+#define ATA_CMD_READ_SECTORS      0x20
+#define ATA_CMD_IDENTIFY          0xEC
+
 /* SiFive FU740 host bridge — vendor 0xF15E, used as device 0 of bus 0.
  * src/devices/pci-bus.c:878. Always at 00:00.0. */
 #define RVVM_PCI_ID_HOST_BRIDGE   0x0000F15EU

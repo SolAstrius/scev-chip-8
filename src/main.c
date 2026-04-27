@@ -6,6 +6,7 @@
 #include "fdt.h"
 #include "i2c.h"
 #include "hid.h"
+#include "ata.h"
 #include "roms.h"
 #include <stddef.h>
 
@@ -103,8 +104,27 @@ void kmain(uint64_t hartid, uint64_t fdt_addr) {
     }
 
     chip8_reset(&vm, time_now());
-    chip8_load(&vm, rom_ibm_logo, sizeof(rom_ibm_logo));
-    uart_printf("loaded IBM logo (%u bytes)\n", (uint64_t)sizeof(rom_ibm_logo));
+
+    /* If RVVM was started with -ata <rom>.ch8, load the program off the
+     * disk; otherwise fall back to the embedded IBM-logo splash. We
+     * always attempt to read 7 sectors (=3.5 KiB, max CHIP-8 program
+     * area). RVVM returns IDENTIFY capacity=0 for files smaller than
+     * one sector, so don't gate on that — just try the read. */
+    static uint8_t disk_buf[CHIP8_MEM_SIZE - CHIP8_PROGRAM_BASE];
+    ata_t    disk;
+    uint32_t got = 0;
+    if (ata_init(&disk)) got = ata_read(&disk, 0, disk_buf, 7);
+    if (got > 0) {
+        uint64_t bytes = (uint64_t)got * 512;
+        if (bytes > sizeof(disk_buf)) bytes = sizeof(disk_buf);
+        chip8_load(&vm, disk_buf, bytes);
+        uart_printf("loaded ROM from -ata: %u sectors (%u bytes)\n",
+                    (uint64_t)got, bytes);
+    } else {
+        chip8_load(&vm, rom_ibm_logo, sizeof(rom_ibm_logo));
+        uart_printf("loaded embedded IBM logo (%u bytes)\n",
+                    (uint64_t)sizeof(rom_ibm_logo));
+    }
     uart_puts("Keypad: 1234 / qwer / asdf / zxcv  (focus the GUI window)\n\n");
 
     uint64_t deadline = time_now() + RVVM_TICKS_PER_FRAME;

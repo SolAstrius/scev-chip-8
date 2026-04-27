@@ -18,7 +18,8 @@ LDFLAGS  := -nostdlib -static -Wl,-T,link.ld
 
 OBJS     := build/start.o build/main.o build/uart.o build/chip8.o \
             build/pci.o build/bochs.o build/fdt.o \
-            build/i2c.o build/hid.o
+            build/i2c.o build/hid.o build/ata.o \
+            build/string.o
 
 all: firmware.bin
 
