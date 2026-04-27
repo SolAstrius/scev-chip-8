@@ -6,7 +6,7 @@
 #include "fdt.h"
 #include "i2c.h"
 #include "hid.h"
-#include "ata.h"
+#include "nvme.h"
 #include "hda.h"
 #include "roms.h"
 #include <stddef.h>
@@ -185,14 +185,23 @@ void kmain(uint64_t hartid, uint64_t fdt_addr) {
     uint32_t cycles_per_frame = CYCLES_PER_FRAME_DEFAULT;
     bool     vblank_wait      = false;
 
-    /* If RVVM was started with -ata <rom>.ch8, load the program off the
+    /* If RVVM was started with -nvme <rom>.ch8, load the program off the
      * disk; otherwise fall back to the embedded IBM-logo splash. */
-    static uint8_t disk_buf[CHIP8_MEM_SIZE - CHIP8_PROGRAM_BASE];
-    ata_t    disk;
+    static uint8_t disk_buf[CHIP8_MEM_SIZE - CHIP8_PROGRAM_BASE]
+        __attribute__((aligned(NVME_PAGE_SIZE)));
+    static nvme_t  disk;
     uint32_t got = 0;
-    if (ata_init(&disk)) got = ata_read(&disk, 0, disk_buf, 7);
+    if (nvme_init(&disk)) {
+        /* Read up to 7 LBAs (3.5 KiB — covers any CHIP-8 ROM plus its
+         * fat-ROM header). Clamp to actual device size; NVMe rejects
+         * the whole command with LBA_RANGE if we ask for one block
+         * past the namespace. */
+        uint32_t want = 7;
+        if (want > disk.num_lbas) want = disk.num_lbas;
+        if (want) got = nvme_read(&disk, 0, disk_buf, want);
+    }
     if (got > 0) {
-        uint64_t bytes = (uint64_t)got * 512;
+        uint64_t bytes = (uint64_t)got * NVME_LBA_SIZE;
         const uint8_t *prog = disk_buf;
 
         /* Fat-ROM header? Strip it and apply per-ROM config. */
@@ -225,7 +234,7 @@ no_header:
             bytes = sizeof(disk_buf) - ROM_HEADER_LEN;
         }
         chip8_load(&vm, prog, bytes);
-        uart_printf("loaded ROM from -ata: %u sectors (%u prog bytes)\n",
+        uart_printf("loaded ROM from -nvme: %u LBAs (%u prog bytes)\n",
                     (uint64_t)got, bytes);
     } else {
         chip8_load(&vm, rom_ibm_logo, sizeof(rom_ibm_logo));
