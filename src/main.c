@@ -4,36 +4,62 @@
 #include "bochs.h"
 #include "pci.h"
 #include "fdt.h"
+#include "i2c.h"
+#include "hid.h"
 #include "roms.h"
-#include <stddef.h>     /* NULL */
+#include <stddef.h>
 
 extern char __bss_start[], __bss_end[];
 
 #define CYCLES_PER_FRAME    11
-#define CHIP8_SCALE         10                          /* 64×32 → 640×320 */
+#define CHIP8_SCALE         10
 #define DISPLAY_W           (CHIP8_DISPLAY_W * CHIP8_SCALE)
 #define DISPLAY_H           (CHIP8_DISPLAY_H * CHIP8_SCALE)
 
-#define COLOR_FG            0x00B0FFB0U                 /* CHIP-8 phosphor green */
-#define COLOR_BG            0x00101010U                 /* near-black */
+#define COLOR_FG            0x00B0FFB0U
+#define COLOR_BG            0x00101010U
 
-static chip8_t vm;
-static bochs_t bd;
+static chip8_t        vm;
+static bochs_t        bd;
+static hid_keyboard_t kb;
 
-static void map_host_to_chip8_keys(int c, bool down) {
-    static const struct { char c; uint8_t k; } map[] = {
-        {'1', 0x1}, {'2', 0x2}, {'3', 0x3}, {'4', 0xC},
-        {'q', 0x4}, {'w', 0x5}, {'e', 0x6}, {'r', 0xD},
-        {'a', 0x7}, {'s', 0x8}, {'d', 0x9}, {'f', 0xE},
-        {'z', 0xA}, {'x', 0x0}, {'c', 0xB}, {'v', 0xF},
-    };
-    for (uint64_t i = 0; i < sizeof(map) / sizeof(map[0]); i++) {
-        if (map[i].c == c) { chip8_set_key(&vm, map[i].k, down); return; }
+/* USB HID usage code → CHIP-8 hex keypad. Mapping mirrors the
+ * canonical 4×4 layout (left half of QWERTY):
+ *   1 2 3 4   →   1 2 3 C
+ *   q w e r   →   4 5 6 D
+ *   a s d f   →   7 8 9 E
+ *   z x c v   →   A 0 B F
+ *
+ * Returns 0xFF for "not a keypad key." */
+static uint8_t hid_to_chip8(uint8_t usage) {
+    switch (usage) {
+    case 0x1E: return 0x1;     /* 1 */
+    case 0x1F: return 0x2;     /* 2 */
+    case 0x20: return 0x3;     /* 3 */
+    case 0x21: return 0xC;     /* 4 */
+    case 0x14: return 0x4;     /* Q */
+    case 0x1A: return 0x5;     /* W */
+    case 0x08: return 0x6;     /* E */
+    case 0x15: return 0xD;     /* R */
+    case 0x04: return 0x7;     /* A */
+    case 0x16: return 0x8;     /* S */
+    case 0x07: return 0x9;     /* D */
+    case 0x09: return 0xE;     /* F */
+    case 0x1D: return 0xA;     /* Z */
+    case 0x1B: return 0x0;     /* X */
+    case 0x06: return 0xB;     /* C */
+    case 0x19: return 0xF;     /* V */
+    default:   return 0xFF;
     }
 }
 
-/* Look up `compatible` in FDT and return the first reg.addr, or `fallback`
- * if absent / FDT init failed. */
+static void on_key_event(uint8_t usage, bool pressed, void *ctx) {
+    (void)ctx;
+    uint8_t k = hid_to_chip8(usage);
+    if (k != 0xFF) chip8_set_key(&vm, k, pressed);
+}
+
+/* Look up `compatible` in FDT and return the first reg.addr, or `fallback`. */
 static uintptr_t fdt_addr_of(const fdt_t *fdt, const char *compat,
                              uintptr_t fallback) {
     uint32_t off = fdt_find_compatible(fdt, compat);
@@ -44,39 +70,30 @@ static uintptr_t fdt_addr_of(const fdt_t *fdt, const char *compat,
 }
 
 void kmain(uint64_t hartid, uint64_t fdt_addr) {
-    /* Bring UART up first with the rvvm.h fallback so we can print
-     * diagnostics even if FDT parsing fails. */
     uart_init(0);
-
     uart_puts("\nscev-cores/chip-8 — bare-metal CHIP-8 on RVVM\n");
     uart_printf("hartid=%u  fdt=%p  bss=%u bytes\n",
                 hartid, (void *)(uintptr_t)fdt_addr,
                 (uint64_t)(__bss_end - __bss_start));
 
-    /* Discover device addresses via FDT, then re-init drivers
-     * with the discovered values. */
+    /* FDT discovery + driver re-init with discovered addresses. */
     fdt_t fdt;
     bool fdt_ok = fdt_init(&fdt, (const void *)(uintptr_t)fdt_addr);
-    if (!fdt_ok) {
-        uart_puts("FDT: invalid blob — using hardcoded addresses\n");
-    } else {
-        uintptr_t uart_at = fdt_addr_of(&fdt, "ns16550a",              RVVM_UART_BASE);
-        uintptr_t pci_at  = fdt_addr_of(&fdt, "pci-host-ecam-generic", RVVM_PCI_ECAM_BASE);
-        uintptr_t i2c_at  = fdt_addr_of(&fdt, "opencores,i2c-ocores",  RVVM_I2C_OC_BASE);
-        uintptr_t plic_at = fdt_addr_of(&fdt, "sifive,plic-1.0.0",     0);
-        uintptr_t clint_at= fdt_addr_of(&fdt, "sifive,clint0",         0);
+    uintptr_t uart_at = fdt_ok ? fdt_addr_of(&fdt, "ns16550a",              RVVM_UART_BASE)
+                               : RVVM_UART_BASE;
+    uintptr_t pci_at  = fdt_ok ? fdt_addr_of(&fdt, "pci-host-ecam-generic", RVVM_PCI_ECAM_BASE)
+                               : RVVM_PCI_ECAM_BASE;
+    uintptr_t i2c_at  = fdt_ok ? fdt_addr_of(&fdt, "opencores,i2c-ocores",  RVVM_I2C_OC_BASE)
+                               : RVVM_I2C_OC_BASE;
+    uart_init(uart_at);
+    pci_init(pci_at);
+    i2c_init(i2c_at);
+    hid_kb_init(&kb, RVVM_I2C_HID_KEYBOARD);
+    uart_printf("FDT: uart@%p  pci@%p  i2c@%p  hid_kb_addr=%u\n",
+                (void *)uart_at, (void *)pci_at, (void *)i2c_at,
+                (uint64_t)RVVM_I2C_HID_KEYBOARD);
 
-        uart_init(uart_at);
-        pci_init(pci_at);
-
-        uart_printf("FDT OK — discovered:\n");
-        uart_printf("  uart  @ %p\n", (void *)uart_at);
-        uart_printf("  pci   @ %p\n", (void *)pci_at);
-        uart_printf("  i2c   @ %p\n", (void *)i2c_at);
-        uart_printf("  plic  @ %p\n", (void *)plic_at);
-        uart_printf("  clint @ %p\n", (void *)clint_at);
-    }
-
+    /* Bring up the framebuffer if RVVM was started with -bochs_display. */
     bool gfx = bochs_init(&bd, DISPLAY_W, DISPLAY_H);
     if (gfx) {
         bochs_fill(&bd, COLOR_BG);
@@ -88,28 +105,17 @@ void kmain(uint64_t hartid, uint64_t fdt_addr) {
     chip8_reset(&vm, time_now());
     chip8_load(&vm, rom_ibm_logo, sizeof(rom_ibm_logo));
     uart_printf("loaded IBM logo (%u bytes)\n", (uint64_t)sizeof(rom_ibm_logo));
+    uart_puts("Keypad: 1234 / qwer / asdf / zxcv  (focus the GUI window)\n\n");
 
-    uart_puts("Keypad: 1234 / qwer / asdf / zxcv (UART input)\n\n");
-
-    uint64_t deadline    = time_now() + RVVM_TICKS_PER_FRAME;
-    uint8_t  key_age[16] = {0};
-
+    uint64_t deadline = time_now() + RVVM_TICKS_PER_FRAME;
     for (;;) {
-        for (int c; (c = uart_getc_nb()) >= 0; ) {
-            map_host_to_chip8_keys(c, true);
-            for (int i = 0; i < 16; i++) {
-                if ((vm.keys >> i) & 1) key_age[i] = 6;
-            }
-        }
+        /* Drain HID events into the CHIP-8 key state. */
+        hid_kb_poll(&kb, on_key_event, NULL);
 
         for (int i = 0; i < CYCLES_PER_FRAME && !vm.halted; i++) {
             chip8_step(&vm);
         }
         chip8_tick_60hz(&vm);
-
-        for (int i = 0; i < 16; i++) {
-            if (key_age[i] && --key_age[i] == 0) chip8_set_key(&vm, i, false);
-        }
 
         if (vm.fb_dirty) {
             if (gfx) {
