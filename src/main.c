@@ -11,13 +11,39 @@
 #include "roms.h"
 #include <stddef.h>
 
+/* "scev fat-ROM" container — optional 16-byte header, magic "SCEVCH8\1"
+ * (8 bytes), then per-ROM config we want carried with the file:
+ *   off 0 .. 7   "SCEVCH8" + 1-byte version
+ *   off 8        cycles_per_frame (uint8, 0 = use default 30)
+ *   off 9        flags (bit 0: enable vblank-wait quirk)
+ *   off 10..15   reserved (zero)
+ * The actual CHIP-8 program starts at offset 16.
+ *
+ * If the magic doesn't match, the file is treated as a raw .ch8 — full
+ * backward compatibility with existing ROM dumps. */
+#define ROM_MAGIC0       'S'
+#define ROM_MAGIC1       'C'
+#define ROM_MAGIC2       'E'
+#define ROM_MAGIC3       'V'
+#define ROM_MAGIC4       'C'
+#define ROM_MAGIC5       'H'
+#define ROM_MAGIC6       '8'
+#define ROM_VERSION      1
+#define ROM_HEADER_LEN   16
+#define ROM_FLAG_VBLANK  0x01
+
+static bool rom_header_valid(const uint8_t *p) {
+    return p[0] == ROM_MAGIC0 && p[1] == ROM_MAGIC1 && p[2] == ROM_MAGIC2
+        && p[3] == ROM_MAGIC3 && p[4] == ROM_MAGIC4 && p[5] == ROM_MAGIC5
+        && p[6] == ROM_MAGIC6 && p[7] == ROM_VERSION;
+}
+
 extern char __bss_start[], __bss_end[];
 
-/* Octo's chip8Archive metadata recommends per-ROM tickrates from 7
- * (octojam1title) up to 200 (tank). 30 covers the chip8Archive median
- * (~15-30) decently; tank looks slow but doesn't break. Game-specific
- * tuning would mean reading hashes / metadata, not worth it yet. */
-#define CYCLES_PER_FRAME    30
+/* Default cycles/frame when no fat-ROM header overrides it. Octo's
+ * chip8Archive medians around 15-30 here. Tank wants 200 — pack a
+ * fat-ROM header on it via mkrom.py --tickrate 200. */
+#define CYCLES_PER_FRAME_DEFAULT  30
 #define CHIP8_SCALE         10
 #define DISPLAY_W           (CHIP8_DISPLAY_W * CHIP8_SCALE)
 #define DISPLAY_H           (CHIP8_DISPLAY_H * CHIP8_SCALE)
@@ -130,34 +156,46 @@ void kmain(uint64_t hartid, uint64_t fdt_addr) {
     }
 
     chip8_reset(&vm, time_now());
-    /* COSMAC display-wait quirk — disabled by default. Octo's chip8Archive
-     * metadata sets vBlankQuirks to false on every entry, and enabling it
-     * caps draw-heavy games at one sprite per 60 Hz frame which feels
-     * very sluggish (e.g. tank wants tickrate=200 = 12000 IPS but with
-     * vblank-wait you get 60 sprite blits/sec max). chip8_set_vblank_wait
-     * is exposed for per-ROM opt-in if a particular game needs it. */
-    chip8_set_vblank_wait(&vm, false);
+
+    /* Per-ROM config — defaults overridden by the fat-ROM header below. */
+    uint32_t cycles_per_frame = CYCLES_PER_FRAME_DEFAULT;
+    bool     vblank_wait      = false;
 
     /* If RVVM was started with -ata <rom>.ch8, load the program off the
-     * disk; otherwise fall back to the embedded IBM-logo splash. We
-     * always attempt to read 7 sectors (=3.5 KiB, max CHIP-8 program
-     * area). RVVM returns IDENTIFY capacity=0 for files smaller than
-     * one sector, so don't gate on that — just try the read. */
+     * disk; otherwise fall back to the embedded IBM-logo splash. */
     static uint8_t disk_buf[CHIP8_MEM_SIZE - CHIP8_PROGRAM_BASE];
     ata_t    disk;
     uint32_t got = 0;
     if (ata_init(&disk)) got = ata_read(&disk, 0, disk_buf, 7);
     if (got > 0) {
         uint64_t bytes = (uint64_t)got * 512;
-        if (bytes > sizeof(disk_buf)) bytes = sizeof(disk_buf);
-        chip8_load(&vm, disk_buf, bytes);
-        uart_printf("loaded ROM from -ata: %u sectors (%u bytes)\n",
+        const uint8_t *prog = disk_buf;
+
+        /* Fat-ROM header? Strip it and apply per-ROM config. */
+        if (bytes >= ROM_HEADER_LEN && rom_header_valid(disk_buf)) {
+            uint8_t hdr_tickrate = disk_buf[8];
+            uint8_t hdr_flags    = disk_buf[9];
+            if (hdr_tickrate) cycles_per_frame = hdr_tickrate;
+            if (hdr_flags & ROM_FLAG_VBLANK) vblank_wait = true;
+            prog   = disk_buf + ROM_HEADER_LEN;
+            bytes -= ROM_HEADER_LEN;
+            uart_printf("ROM hdr: tickrate=%u  vblank_wait=%u\n",
+                        (uint64_t)cycles_per_frame, (uint64_t)vblank_wait);
+        }
+
+        if (bytes > sizeof(disk_buf) - ROM_HEADER_LEN) {
+            bytes = sizeof(disk_buf) - ROM_HEADER_LEN;
+        }
+        chip8_load(&vm, prog, bytes);
+        uart_printf("loaded ROM from -ata: %u sectors (%u prog bytes)\n",
                     (uint64_t)got, bytes);
     } else {
         chip8_load(&vm, rom_ibm_logo, sizeof(rom_ibm_logo));
         uart_printf("loaded embedded IBM logo (%u bytes)\n",
                     (uint64_t)sizeof(rom_ibm_logo));
     }
+
+    chip8_set_vblank_wait(&vm, vblank_wait);
     uart_puts("Keypad: 1234 / qwer / asdf / zxcv  (focus the GUI window)\n\n");
 
     uint64_t deadline = time_now() + RVVM_TICKS_PER_FRAME;
@@ -166,7 +204,7 @@ void kmain(uint64_t hartid, uint64_t fdt_addr) {
         /* Drain HID events into the CHIP-8 key state. */
         hid_kb_poll(&kb, on_key_event, NULL);
 
-        for (int i = 0; i < CYCLES_PER_FRAME && !vm.halted; i++) {
+        for (uint32_t i = 0; i < cycles_per_frame && !vm.halted; i++) {
             chip8_step(&vm);
         }
         chip8_tick_60hz(&vm);
