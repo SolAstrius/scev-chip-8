@@ -150,6 +150,16 @@ void kmain(uint64_t hartid, uint64_t fdt_addr) {
     pci_init(pci_at);
     i2c_init(i2c_at);
     hid_kb_init(&kb, RVVM_I2C_HID_KEYBOARD);
+
+    /* CLINT for wfi-paced waits + tick rate for frame deadlines. */
+    uintptr_t clint_at = fdt_ok ? fdt_addr_of(&fdt, "sifive,clint0", RVVM_CLINT_BASE)
+                                : RVVM_CLINT_BASE;
+    uint32_t hz = 0;
+    if (fdt_ok) {
+        uint32_t cpus_off = fdt_find_node_named(&fdt, "cpus");
+        if (cpus_off != UINT32_MAX) fdt_node_prop_u32(&fdt, cpus_off, "timebase-frequency", &hz);
+    }
+    time_init(clint_at, hz);
     uart_printf("FDT: uart@%p  pci@%p  i2c@%p  hid_kb_addr=%u\n",
                 (void *)uart_at, (void *)pci_at, (void *)i2c_at,
                 (uint64_t)RVVM_I2C_HID_KEYBOARD);
@@ -226,7 +236,7 @@ no_header:
     chip8_set_vblank_wait(&vm, vblank_wait);
     uart_puts("Keypad: 1234 / qwer / asdf / zxcv  (focus the GUI window)\n\n");
 
-    uint64_t deadline = time_now() + RVVM_TICKS_PER_FRAME;
+    uint64_t deadline = time_now() + time_ticks_per_frame();
     bool     beeping  = false;       /* track ST-driven beep state */
     for (;;) {
         /* Drain HID events into the CHIP-8 key state. */
@@ -268,6 +278,6 @@ no_header:
         }
 
         time_busy_until(deadline);
-        deadline += RVVM_TICKS_PER_FRAME;
+        deadline += time_ticks_per_frame();
     }
 }
