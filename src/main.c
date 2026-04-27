@@ -55,6 +55,15 @@ static uint8_t hid_to_chip8(uint8_t usage) {
     case 0x1B: return 0x0;     /* X */
     case 0x06: return 0xB;     /* C */
     case 0x19: return 0xF;     /* V */
+
+    /* Arrow keys as a convenience alias for the directional cluster.
+     * Most CHIP-8 games use the WASD-shape: 5=up, 8=down, 4=left, 6=right
+     * (the central column of the hex pad). */
+    case 0x52: return 0x5;     /* Up arrow */
+    case 0x51: return 0x8;     /* Down arrow */
+    case 0x50: return 0x4;     /* Left arrow */
+    case 0x4F: return 0x6;     /* Right arrow */
+
     default:   return 0xFF;
     }
 }
@@ -66,9 +75,10 @@ static void on_key_event(uint8_t usage, bool pressed, void *ctx) {
      * and don't see this log line, the i2c-hid path is broken; if you
      * see the log but nothing happens in the game, the game probably
      * doesn't use that key (caveexplorer = Q/E/A/D, not 1234). */
-    uart_printf("hid: usage=0x%x %s -> chip8 key %s%x\n",
+    /* Note: uart's %x already prepends "0x", so formats only carry text. */
+    uart_printf("hid: usage=%x %s -> chip8 key %s%x\n",
                 (uint64_t)usage, pressed ? "DOWN" : "up  ",
-                k == 0xFF ? "(unmapped) 0x" : "0x", (uint64_t)k);
+                k == 0xFF ? "(unmapped) " : "", (uint64_t)k);
     if (k != 0xFF) chip8_set_key(&vm, k, pressed);
 }
 
