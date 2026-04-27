@@ -12,7 +12,10 @@
 #include <stdint.h>
 #include <stdarg.h>
 
-void uart_init(void);
+/* Initialise the UART driver. Pass the MMIO base address discovered
+ * via FDT (compatible = "ns16550a"). If `base` is 0, falls back to
+ * RVVM's default of 0x10000000. */
+void uart_init(uintptr_t base);
 
 /* Output. */
 void uart_putc(char c);

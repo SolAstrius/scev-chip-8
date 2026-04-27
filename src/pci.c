@@ -2,10 +2,18 @@
 #include "rvvm.h"
 #include "uart.h"
 
+/* ECAM base — set by pci_init(). Defaults to RVVM's hardcode in case
+ * pci_init wasn't called (e.g. no FDT). */
+static uintptr_t ecam_base = RVVM_PCI_ECAM_BASE;
+
+void pci_init(uintptr_t base) {
+    if (base) ecam_base = base;
+}
+
 /* ECAM address layout: ECAM_BASE | bus<<20 | dev<<15 | func<<12 | reg.
  * 256 buses × 32 devices × 8 functions × 4 KiB. */
 static inline uintptr_t ecam_addr(uint8_t bus, uint8_t dev, uint8_t func) {
-    return RVVM_PCI_ECAM_BASE
+    return ecam_base
          | ((uintptr_t)bus  << 20)
          | ((uintptr_t)dev  << 15)
          | ((uintptr_t)func << 12);

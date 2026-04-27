@@ -29,6 +29,11 @@ typedef struct {
 #define PCI_CMD_MEM             0x0002
 #define PCI_CMD_BUS_MASTER      0x0004
 
+/* Initialise the PCI subsystem with the ECAM base address discovered
+ * via FDT (compatible = "pci-host-ecam-generic"). Pass 0 to fall back
+ * to RVVM's default 0x30000000. */
+void pci_init(uintptr_t ecam_base);
+
 /* Find the first function with a matching (vendor << 0 | device << 16)
  * config-space word. Fills `out` and returns true on success. */
 bool pci_find_device(uint32_t vendor_device, pci_func_t *out);

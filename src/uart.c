@@ -2,59 +2,56 @@
 #include "mmio.h"
 #include "rvvm.h"
 
-#define UART_BASE   RVVM_UART_BASE
+/* Set by uart_init(); used by every accessor. Defaults to RVVM's known
+ * base so accidental access before init still talks to the right place. */
+static uintptr_t uart_base = RVVM_UART_BASE;
 
-/* Register offsets — match src/devices/ns16550a.c lines 35-47. */
-#define UART_RBR    0x0   /* RX buffer        (read,  DLAB=0) */
-#define UART_THR    0x0   /* TX hold          (write, DLAB=0) */
-#define UART_DLL    0x0   /* divisor low      (R/W,   DLAB=1) */
-#define UART_IER    0x1   /* irq enable       (R/W,   DLAB=0) */
-#define UART_DLM    0x1   /* divisor high     (R/W,   DLAB=1) */
-#define UART_IIR    0x2   /* irq ident        (read) */
-#define UART_FCR    0x2   /* FIFO control     (write) */
-#define UART_LCR    0x3   /* line control */
-#define UART_MCR    0x4   /* modem control */
-#define UART_LSR    0x5   /* line status */
-#define UART_MSR    0x6   /* modem status */
-#define UART_SCR    0x7   /* scratch */
+#define UART_RBR    0x0
+#define UART_THR    0x0
+#define UART_DLL    0x0
+#define UART_IER    0x1
+#define UART_DLM    0x1
+#define UART_IIR    0x2
+#define UART_FCR    0x2
+#define UART_LCR    0x3
+#define UART_MCR    0x4
+#define UART_LSR    0x5
+#define UART_MSR    0x6
+#define UART_SCR    0x7
 
-/* LSR bits (16550A spec). */
-#define LSR_DR      0x01  /* data ready (RX) */
-#define LSR_THRE    0x20  /* TX hold register empty */
-#define LSR_TEMT    0x40  /* TX shift register empty too */
+#define LSR_DR      0x01
+#define LSR_THRE    0x20
+#define LSR_TEMT    0x40
 
-/* LCR bits. */
-#define LCR_8N1     0x03  /* 8 data bits, no parity, 1 stop */
-#define LCR_DLAB    0x80  /* divisor latch access */
+#define LCR_8N1     0x03
+#define LCR_DLAB    0x80
 
-/* FCR bits. */
-#define FCR_ENABLE  0x01  /* enable FIFOs */
-#define FCR_CLR_RX  0x02  /* clear RX FIFO */
-#define FCR_CLR_TX  0x04  /* clear TX FIFO */
-#define FCR_TRIG14  0xC0  /* RX FIFO trigger at 14 bytes */
+#define FCR_ENABLE  0x01
+#define FCR_CLR_RX  0x02
+#define FCR_CLR_TX  0x04
+#define FCR_TRIG14  0xC0
 
-/* MCR bits. */
 #define MCR_DTR     0x01
 #define MCR_RTS     0x02
-#define MCR_OUT2    0x08  /* must be set on real PC hw to enable IRQs out */
+#define MCR_OUT2    0x08
 
-static inline uint8_t r(uint32_t off) { return mmio_r8(UART_BASE + off); }
-static inline void    w(uint32_t off, uint8_t v) { mmio_w8(UART_BASE + off, v); }
+static inline uint8_t r(uint32_t off) { return mmio_r8(uart_base + off); }
+static inline void    w(uint32_t off, uint8_t v) { mmio_w8(uart_base + off, v); }
 
-void uart_init(void) {
-    /* Real 16550A init sequence. RVVM ignores most of it but doing it
-     * properly costs nothing and keeps the driver portable. */
-    w(UART_IER, 0x00);              /* mask all UART interrupts */
-    w(UART_LCR, LCR_DLAB);          /* expose divisor latch */
-    w(UART_DLL, 0x01);              /* divisor = 1 → ~max speed; RVVM ignores */
+void uart_init(uintptr_t base) {
+    if (base) uart_base = base;
+
+    w(UART_IER, 0x00);
+    w(UART_LCR, LCR_DLAB);
+    w(UART_DLL, 0x01);
     w(UART_DLM, 0x00);
-    w(UART_LCR, LCR_8N1);           /* 8N1, divisor latch closed */
+    w(UART_LCR, LCR_8N1);
     w(UART_FCR, FCR_ENABLE | FCR_CLR_RX | FCR_CLR_TX | FCR_TRIG14);
     w(UART_MCR, MCR_DTR | MCR_RTS | MCR_OUT2);
 }
 
 void uart_putc(char c) {
-    while (!(r(UART_LSR) & LSR_THRE)) { /* busy-wait */ }
+    while (!(r(UART_LSR) & LSR_THRE)) {}
     w(UART_THR, (uint8_t)c);
 }
 
@@ -79,11 +76,9 @@ int uart_getc_nb(void) {
 
 char uart_getc(void) {
     int c;
-    while ((c = uart_getc_nb()) < 0) { /* busy-wait */ }
+    while ((c = uart_getc_nb()) < 0) {}
     return (char)c;
 }
-
-/* --- Number formatting. ----------------------------------------------- */
 
 static const char hex_digits[] = "0123456789abcdef";
 
@@ -120,14 +115,12 @@ void uart_hexdump(const void *buf, uint64_t len) {
     for (uint64_t off = 0; off < len; off += 16) {
         uart_put_hex64((uint64_t)(uintptr_t)(p + off));
         uart_puts("  ");
-        /* hex columns */
         for (uint64_t i = 0; i < 16; i++) {
             if (off + i < len) { uart_put_hex8(p[off + i]); uart_putc(' '); }
             else                 uart_puts("   ");
             if (i == 7) uart_putc(' ');
         }
         uart_puts(" |");
-        /* ASCII gutter */
         for (uint64_t i = 0; i < 16 && off + i < len; i++) {
             uint8_t c = p[off + i];
             uart_putc((c >= 0x20 && c < 0x7F) ? (char)c : '.');
@@ -136,7 +129,7 @@ void uart_hexdump(const void *buf, uint64_t len) {
     }
 }
 
-/* --- Tiny printf. ----------------------------------------------------- */
+#include <stdarg.h>
 
 void uart_vprintf(const char *fmt, va_list ap) {
     while (*fmt) {
@@ -150,7 +143,7 @@ void uart_vprintf(const char *fmt, va_list ap) {
         case 'x': uart_put_hex64(va_arg(ap, uint64_t));           break;
         case 'p': uart_put_hex64((uint64_t)va_arg(ap, void *));   break;
         case '%': uart_putc('%');                                 break;
-        case 0:   return;   /* trailing % */
+        case 0:   return;
         default:  uart_putc('?');                                 break;
         }
     }

@@ -2,8 +2,10 @@
 #include "time.h"
 #include "chip8.h"
 #include "bochs.h"
+#include "pci.h"
 #include "fdt.h"
 #include "roms.h"
+#include <stddef.h>     /* NULL */
 
 extern char __bss_start[], __bss_end[];
 
@@ -30,42 +32,49 @@ static void map_host_to_chip8_keys(int c, bool down) {
     }
 }
 
-/* Look up a SoC device by its `compatible` string and report its
- * (addr, size) — for diagnostics during the FDT-discovery transition. */
-static void dump_compat(const fdt_t *fdt, const char *compat) {
+/* Look up `compatible` in FDT and return the first reg.addr, or `fallback`
+ * if absent / FDT init failed. */
+static uintptr_t fdt_addr_of(const fdt_t *fdt, const char *compat,
+                             uintptr_t fallback) {
     uint32_t off = fdt_find_compatible(fdt, compat);
-    if (off == UINT32_MAX) {
-        uart_printf("  %s — not present\n", compat);
-        return;
-    }
-    uint64_t addr = 0, size = 0;
-    if (fdt_node_reg64(fdt, off, 0, &addr, &size)) {
-        uart_printf("  %s @ %p  size=%x\n",
-                    compat, (void *)(uintptr_t)addr, size);
-    } else {
-        uart_printf("  %s — no reg\n", compat);
-    }
+    if (off == UINT32_MAX) return fallback;
+    uint64_t addr = 0;
+    if (!fdt_node_reg64(fdt, off, 0, &addr, NULL)) return fallback;
+    return (uintptr_t)addr;
 }
 
 void kmain(uint64_t hartid, uint64_t fdt_addr) {
-    uart_init();
+    /* Bring UART up first with the rvvm.h fallback so we can print
+     * diagnostics even if FDT parsing fails. */
+    uart_init(0);
+
     uart_puts("\nscev-cores/chip-8 — bare-metal CHIP-8 on RVVM\n");
     uart_printf("hartid=%u  fdt=%p  bss=%u bytes\n",
                 hartid, (void *)(uintptr_t)fdt_addr,
                 (uint64_t)(__bss_end - __bss_start));
 
+    /* Discover device addresses via FDT, then re-init drivers
+     * with the discovered values. */
     fdt_t fdt;
-    if (!fdt_init(&fdt, (const void *)(uintptr_t)fdt_addr)) {
-        uart_puts("FDT: invalid blob — falling back to hardcoded addresses\n");
+    bool fdt_ok = fdt_init(&fdt, (const void *)(uintptr_t)fdt_addr);
+    if (!fdt_ok) {
+        uart_puts("FDT: invalid blob — using hardcoded addresses\n");
     } else {
-        uart_puts("FDT: discovered devices\n");
-        dump_compat(&fdt, "ns16550a");
-        dump_compat(&fdt, "opencores,i2c-ocores");
-        dump_compat(&fdt, "pci-host-ecam-generic");
-        dump_compat(&fdt, "sifive,plic-1.0.0");
-        dump_compat(&fdt, "sifive,clint0");
-        dump_compat(&fdt, "google,goldfish-rtc");
-        dump_compat(&fdt, "syscon");
+        uintptr_t uart_at = fdt_addr_of(&fdt, "ns16550a",              RVVM_UART_BASE);
+        uintptr_t pci_at  = fdt_addr_of(&fdt, "pci-host-ecam-generic", RVVM_PCI_ECAM_BASE);
+        uintptr_t i2c_at  = fdt_addr_of(&fdt, "opencores,i2c-ocores",  RVVM_I2C_OC_BASE);
+        uintptr_t plic_at = fdt_addr_of(&fdt, "sifive,plic-1.0.0",     0);
+        uintptr_t clint_at= fdt_addr_of(&fdt, "sifive,clint0",         0);
+
+        uart_init(uart_at);
+        pci_init(pci_at);
+
+        uart_printf("FDT OK — discovered:\n");
+        uart_printf("  uart  @ %p\n", (void *)uart_at);
+        uart_printf("  pci   @ %p\n", (void *)pci_at);
+        uart_printf("  i2c   @ %p\n", (void *)i2c_at);
+        uart_printf("  plic  @ %p\n", (void *)plic_at);
+        uart_printf("  clint @ %p\n", (void *)clint_at);
     }
 
     bool gfx = bochs_init(&bd, DISPLAY_W, DISPLAY_H);
