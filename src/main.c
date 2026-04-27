@@ -2,6 +2,7 @@
 #include "time.h"
 #include "chip8.h"
 #include "bochs.h"
+#include "fdt.h"
 #include "roms.h"
 
 extern char __bss_start[], __bss_end[];
@@ -29,49 +30,42 @@ static void map_host_to_chip8_keys(int c, bool down) {
     }
 }
 
-/* DTB header (libfdt fdt.h equivalent) — first 40 bytes of every
- * Flattened Device Tree blob. All fields are big-endian uint32s. */
-struct fdt_header {
-    uint32_t magic;             /* 0xD00DFEED */
-    uint32_t totalsize;
-    uint32_t off_dt_struct;
-    uint32_t off_dt_strings;
-    uint32_t off_mem_rsvmap;
-    uint32_t version;
-    uint32_t last_comp_version;
-    uint32_t boot_cpuid_phys;
-    uint32_t size_dt_strings;
-    uint32_t size_dt_struct;
-};
-
-#define FDT_MAGIC 0xD00DFEEDU
-
-static inline uint32_t be32(uint32_t v) {
-    return ((v & 0xFF) << 24) | (((v >> 8) & 0xFF) << 16)
-         | (((v >> 16) & 0xFF) << 8) | ((v >> 24) & 0xFF);
+/* Look up a SoC device by its `compatible` string and report its
+ * (addr, size) — for diagnostics during the FDT-discovery transition. */
+static void dump_compat(const fdt_t *fdt, const char *compat) {
+    uint32_t off = fdt_find_compatible(fdt, compat);
+    if (off == UINT32_MAX) {
+        uart_printf("  %s — not present\n", compat);
+        return;
+    }
+    uint64_t addr = 0, size = 0;
+    if (fdt_node_reg64(fdt, off, 0, &addr, &size)) {
+        uart_printf("  %s @ %p  size=%x\n",
+                    compat, (void *)(uintptr_t)addr, size);
+    } else {
+        uart_printf("  %s — no reg\n", compat);
+    }
 }
 
 void kmain(uint64_t hartid, uint64_t fdt_addr) {
     uart_init();
     uart_puts("\nscev-cores/chip-8 — bare-metal CHIP-8 on RVVM\n");
-    uart_printf("hartid=%u  fdt=%p  sp=...  bss=%u bytes\n",
+    uart_printf("hartid=%u  fdt=%p  bss=%u bytes\n",
                 hartid, (void *)(uintptr_t)fdt_addr,
                 (uint64_t)(__bss_end - __bss_start));
 
-    /* Sanity-check the FDT pointer. */
-    if (fdt_addr) {
-        struct fdt_header *fh = (struct fdt_header *)(uintptr_t)fdt_addr;
-        uint32_t magic = be32(fh->magic);
-        if (magic == FDT_MAGIC) {
-            uart_printf("FDT: magic OK, total %u bytes, version %u\n",
-                        (uint64_t)be32(fh->totalsize),
-                        (uint64_t)be32(fh->version));
-        } else {
-            uart_printf("FDT: bad magic %x at %p — not a DTB\n",
-                        (uint64_t)magic, (void *)(uintptr_t)fdt_addr);
-        }
+    fdt_t fdt;
+    if (!fdt_init(&fdt, (const void *)(uintptr_t)fdt_addr)) {
+        uart_puts("FDT: invalid blob — falling back to hardcoded addresses\n");
     } else {
-        uart_puts("FDT: a1 was 0 — RVVM didn't pass a DTB?\n");
+        uart_puts("FDT: discovered devices\n");
+        dump_compat(&fdt, "ns16550a");
+        dump_compat(&fdt, "opencores,i2c-ocores");
+        dump_compat(&fdt, "pci-host-ecam-generic");
+        dump_compat(&fdt, "sifive,plic-1.0.0");
+        dump_compat(&fdt, "sifive,clint0");
+        dump_compat(&fdt, "google,goldfish-rtc");
+        dump_compat(&fdt, "syscon");
     }
 
     bool gfx = bochs_init(&bd, DISPLAY_W, DISPLAY_H);
