@@ -172,9 +172,21 @@ void kmain(uint64_t hartid, uint64_t fdt_addr) {
      * or simple-framebuffer (whatever -res RVVM was started with).
      * Falls back to ANSI UART rendering if neither is present. */
     bool have_gfx = gfx_init_fdt(&g, &fdt, DISPLAY_W, DISPLAY_H);
+    bool db_gfx   = false;
     if (have_gfx) {
         gfx_fill(&g, COLOR_BG);
-        uart_puts("gfx: framebuffer up\n");
+        /* Page-flip on Bochs avoids the host display reading the
+         * framebuffer mid-render. Initialise both halves to BG so the
+         * area outside the 64x32 chip-8 plane stays clean across
+         * flips (chip8_render_gfx only paints inside that plane). */
+        if (gfx_enable_double_buffer(&g)) {
+            db_gfx = true;
+            gfx_fill(&g, COLOR_BG);   /* fills back (post-DB-enable) */
+            gfx_flip(&g);
+            gfx_fill(&g, COLOR_BG);   /* fills new back */
+        }
+        uart_printf("gfx: framebuffer up%s\n",
+                    db_gfx ? " (double-buffered)" : "");
     } else {
         uart_puts("gfx: falling back to ANSI UART render\n");
     }
@@ -276,6 +288,7 @@ no_header:
                 uint32_t y_off = (g.height > DISPLAY_H) ? (g.height - DISPLAY_H) / 2 : 0;
                 chip8_render_gfx(&vm, &g, CHIP8_SCALE, x_off, y_off,
                                  COLOR_FG, COLOR_BG);
+                if (db_gfx) gfx_flip(&g);
             } else {
                 chip8_render_ascii(&vm);
             }
